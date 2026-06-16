@@ -2,10 +2,6 @@
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/setup-kanban-project.yml"
 
 permissions:
   contents: read
@@ -22,20 +18,18 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const title = "Kusanali コミュニティ看板";
+            const title = "Kusanali community kanban";
             const { data: user } = await github.rest.users.getByUsername({ username: owner });
             const ownerId = user.node_id;
             const existing = await github.graphql(
               `query($login: String!) {
                 user(login: $login) {
-                  projectsV2(first: 20) {
-                    nodes { id number title url }
-                  }
+                  projectsV2(first: 20) { nodes { id number title url } }
                 }
               }`,
               { login: owner }
             );
-            let project = existing.user.projectsV2.nodes.find(p => p.title === title);
+            let project = existing.user.projectsV2.nodes.find((p) => p.title === title);
             if (!project) {
               const created = await github.graphql(
                 `mutation($ownerId: ID!, $title: String!) {
@@ -47,13 +41,14 @@ jobs:
               );
               project = created.createProjectV2.projectV2;
             }
+            const repoMeta = await github.rest.repos.get({ owner, repo });
             await github.graphql(
               `mutation($projectId: ID!, $repoId: ID!) {
                 linkProjectV2ToRepository(input: { projectId: $projectId, repositoryId: $repoId }) {
                   repository { nameWithOwner }
                 }
               }`,
-              { projectId: project.id, repoId: context.payload.repository.node_id }
+              { projectId: project.id, repoId: repoMeta.data.node_id }
             );
             const fieldQuery = await github.graphql(
               `query($projectId: ID!) {
@@ -68,10 +63,8 @@ jobs:
               { projectId: project.id }
             );
             const field = fieldQuery.node.field;
-            const want = ["Todo", "In progress", "Done", "Idea"];
-            const have = new Set((field?.options ?? []).map(o => o.name));
-            for (const name of want) {
-              if (have.has(name)) continue;
+            for (const name of ["Todo", "In progress", "Done", "Idea"]) {
+              if ((field?.options ?? []).some((o) => o.name === name)) continue;
               await github.graphql(
                 `mutation($projectId: ID!, $fieldId: ID!, $name: String!) {
                   createProjectV2FieldOption(input: { projectId: $projectId, fieldId: $fieldId, name: $name }) {
@@ -82,12 +75,13 @@ jobs:
               );
             }
             const statusMap = { todo: "Todo", doing: "In progress", done: "Done", idea: "Idea" };
-            const { data: issues } = await github.rest.issues.listForRepo({ owner, repo, state: "open", per_page: 100 });
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner, repo, state: "open", per_page: 100,
+            });
             for (const issue of issues) {
               const body = issue.body ?? "";
               const colMatch = body.match(/\*\*column:\*\*\s*(\w+)/);
-              const column = colMatch?.[1] ?? "todo";
-              const status = statusMap[column] ?? "Todo";
+              const status = statusMap[colMatch?.[1] ?? "todo"] ?? "Todo";
               const add = await github.graphql(
                 `mutation($projectId: ID!, $contentId: ID!) {
                   addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
@@ -109,7 +103,7 @@ jobs:
                 }`,
                 { projectId: project.id }
               );
-              const opt = refreshed.node.field.options.find(o => o.name === status);
+              const opt = refreshed.node.field.options.find((o) => o.name === status);
               if (opt) {
                 await github.graphql(
                   `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
@@ -118,15 +112,15 @@ jobs:
                       value: { singleSelectOptionId: $optionId }
                     }) { projectV2Item { id } }
                   }`,
-                  { projectId: project.id, itemId, fieldId: refreshed.node.field.id, optionId: opt.id }
+                  {
+                    projectId: project.id,
+                    itemId,
+                    fieldId: refreshed.node.field.id,
+                    optionId: opt.id,
+                  }
                 );
               }
             }
-            core.setOutput("projectNumber", project.number);
-            core.setOutput("projectUrl", project.url);
-            core.setOutput("projectId", project.id);
             return project;
       - name: Summary
-        run: |
-          echo "Project URL: ${{ steps.project.outputs.projectUrl }}"
-          echo "Project #: ${{ steps.project.outputs.projectNumber }}"
+        run: echo "Project setup finished"
