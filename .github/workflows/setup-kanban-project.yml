@@ -5,8 +5,7 @@ on:
 
 permissions:
   contents: read
-  issues: read
-  projects: write
+  issues: write
 
 jobs:
   setup:
